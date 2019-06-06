@@ -428,11 +428,21 @@ func (c *commImpl) authenticateRemotePeer(stream stream, initiator bool) (*proto
 	}
 
 	c.logger.Debug("Sending", cMsg, "to", remoteAddress)
+	if initiator {
+		c.logger.Errorf("INITIATOR sending...  I'm %v", string(c.peerIdentity))
+	}else{
+		c.logger.Errorf("RECEIVER sending...  I'm %v", string(c.peerIdentity))
+	}
 	stream.Send(cMsg.Envelope)
 	m, err := readWithTimeout(stream, c.connTimeout, remoteAddress)
 	if err != nil {
 		c.logger.Warningf("Failed reading messge from %s, reason: %v", remoteAddress, err)
 		return nil, err
+	}
+	if initiator {
+		c.logger.Errorf("INITIATOR received!!!  I'm %v", string(c.peerIdentity))
+	}else{
+		c.logger.Errorf("RECEIVER received!!!  I'm %v", string(c.peerIdentity))
 	}
 	receivedMsg := m.GetConn()
 	if receivedMsg == nil {

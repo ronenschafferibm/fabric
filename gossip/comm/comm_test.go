@@ -459,8 +459,10 @@ func TestBasic(t *testing.T) {
 	go reader(m1)
 	go reader(m2)
 	comm1.Send(createGossipMsg(), remotePeer(port2))
-	time.Sleep(time.Second)
+	//time.Sleep(time.Second/50)
 	comm2.Send(createGossipMsg(), remotePeer(port1))
+
+	if port1 != 6{}
 	waitForMessages(t, out, 2, "Didn't receive 2 messages")
 }
 
@@ -952,7 +954,7 @@ func remotePeer(port int) *RemotePeer {
 func waitForMessages(t *testing.T, msgChan chan uint64, count int, errMsg string) {
 	c := 0
 	waiting := true
-	ticker := time.NewTicker(time.Duration(10) * time.Second)
+	ticker := time.NewTicker(time.Duration(3) * time.Second)
 	for waiting {
 		select {
 		case <-msgChan:

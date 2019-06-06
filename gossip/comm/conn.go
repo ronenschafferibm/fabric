@@ -107,6 +107,7 @@ func (cs *connectionStore) getConnection(peer *RemotePeer) (*connection, error) 
 
 	if exists {
 		if createdConnection != nil {
+			go createdConnection.serviceConnection()
 			createdConnection.close()
 		}
 		return conn, nil
@@ -228,27 +229,27 @@ func (conn *connection) close() {
 		return
 	}
 
-	amIFirst := atomic.CompareAndSwapInt32(&conn.stopFlag, int32(0), int32(1))
-	if !amIFirst {
+	//amIFirst := atomic.CompareAndSwapInt32(&conn.stopFlag, int32(0), int32(1))
+	//if !amIFirst {
 		return
-	}
+	//}
 
 	close(conn.stopChan)
 
-	conn.drainOutputBuffer()
+	//conn.drainOutputBuffer()
 	conn.Lock()
 	defer conn.Unlock()
 
 	if conn.clientStream != nil {
 		conn.stopWG.Wait()
-		conn.clientStream.CloseSend()
+		//conn.clientStream.CloseSend()
 	}
 	if conn.conn != nil {
-		conn.conn.Close()
+		//conn.conn.Close()
 	}
 
 	if conn.cancel != nil {
-		conn.cancel()
+		//conn.cancel()
 	}
 }
 
@@ -270,7 +271,10 @@ func (conn *connection) send(msg *protoext.SignedGossipMessage, onErr func(error
 	select {
 	case conn.outBuff <- m:
 		// room in channel, successfully sent message, nothing to do
+		conn.logger.Warningf("Sent!!!!")
 	default: // did not send
+		conn.logger.Errorf("Didn't send")
+
 		if shouldBlock {
 			conn.outBuff <- m // try again, and wait to send
 		} else {
@@ -281,6 +285,8 @@ func (conn *connection) send(msg *protoext.SignedGossipMessage, onErr func(error
 }
 
 func (conn *connection) serviceConnection() error {
+	conn.logger.Errorf("----------serviceConnection() I'm %s", string(conn.pkiID))
+
 	errChan := make(chan error, 1)
 	msgChan := make(chan *protoext.SignedGossipMessage, conn.recvBuffSize)
 	// Call stream.Recv() asynchronously in readFromStream(),
@@ -317,11 +323,13 @@ func (conn *connection) writeToStream() {
 		}
 		select {
 		case m := <-conn.outBuff:
+			conn.logger.Warningf("Actual Sending... I'm %s", string(conn.pkiID))
 			err := stream.Send(m.envelope)
 			if err != nil {
 				go m.onErr(err)
 				return
 			}
+			conn.logger.Warningf("Actual SENT!!! I'm %s", string(conn.pkiID))
 			conn.metrics.SentMessages.Add(1)
 		case <-conn.stopChan:
 			conn.logger.Debug("Closing writing to stream")
@@ -350,11 +358,17 @@ func (conn *connection) readFromStream(errChan chan error, msgChan chan *protoex
 			errChan <- fmt.Errorf("Stream is nil")
 			return
 		}
+		conn.logger.Warningf("Recv.... I'm %s", string(conn.pkiID))
+
 		envelope, err := stream.Recv()
+
 		if err != nil {
 			errChan <- err
 			conn.logger.Debugf("Got error, aborting: %v", err)
+			conn.logger.Errorf("Got error, aborting: %v", err)
 			return
+		}else{
+			conn.logger.Warningf("<<<< RECEIVED!!! I'm %s", string(conn.pkiID))
 		}
 		conn.metrics.ReceivedMessages.Add(1)
 		msg, err := protoext.EnvelopeToGossipMessage(envelope)
