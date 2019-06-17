@@ -7,10 +7,12 @@ SPDX-License-Identifier: Apache-2.0
 package comm
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/hyperledger/fabric/gossip/common"
 	"github.com/hyperledger/fabric/gossip/metrics"
@@ -154,6 +156,7 @@ func (cs *connectionStore) shutdown() {
 	wg.Wait()
 }
 
+// TODO-RONEN: update comment
 // onConnected closes any connection to the remote peer and creates a new connection object to it in order to have only
 // one single bi-directional connection between a pair of peers
 func (cs *connectionStore) onConnected(serverStream proto.Gossip_GossipStreamServer,
@@ -161,16 +164,41 @@ func (cs *connectionStore) onConnected(serverStream proto.Gossip_GossipStreamSer
 	cs.Lock()
 	defer cs.Unlock()
 
-	if c, exists := cs.pki2Conn[string(connInfo.ID)]; exists {
-		c.close()
-	}
-
 	conn := newConnection(nil, nil, nil, serverStream, metrics, cs.config)
 	conn.pkiID = connInfo.ID
 	conn.info = connInfo
 	conn.logger = cs.logger
-	cs.pki2Conn[string(connInfo.ID)] = conn
+
+	cs.resolveConn(conn)
+
 	return conn
+}
+
+// resolveConn decides whether to keep the old connection (if exists) and close the new given connection or vice versa
+// This functions assumes cs.Lock() is taken by the caller
+func (cs *connectionStore) resolveConn(newConn *connection) {
+	oldConn, oldExists := cs.pki2Conn[string(newConn.pkiID)];
+	if !oldExists {
+		cs.pki2Conn[string(newConn.pkiID)] = newConn
+		return
+	}
+
+	select{
+	case <-oldConn.collisionFree:
+		// The new connection was received outside of the collision window
+		// Close the old connection and keep the new connection
+		oldConn.closeDelay()
+		cs.pki2Conn[string(newConn.pkiID)] = newConn
+	default:
+		// The new connection was received inside the collision window
+		// Compare the pki-ids of the connections to decide which one of them to keep
+		if bytes.Compare(oldConn.pkiID, newConn.pkiID) > 0 {
+			oldConn.closeDelay()
+			cs.pki2Conn[string(newConn.pkiID)] = newConn
+		}else{
+			newConn.closeDelay()
+		}
+	}
 }
 
 func (cs *connectionStore) closeConnByPKIid(pkiID common.PKIidType) {
@@ -194,7 +222,12 @@ func newConnection(cl proto.GossipClient, c *grpc.ClientConn, cs proto.Gossip_Go
 		stopFlag:     int32(0),
 		stopChan:     make(chan struct{}, 1),
 		recvBuffSize: config.RecvBuffSize,
+		collisionFree: make(chan struct{}),
 	}
+	// TODO-RONEN: Export to config
+	collisionWindow := 2 * time.Second
+	time.AfterFunc(collisionWindow, func() {close(connection.collisionFree)})
+
 	return connection
 }
 
@@ -221,6 +254,15 @@ type connection struct {
 	stopChan     chan struct{}                   // a method to stop the server-side gRPC call from a different go-routine
 	sync.RWMutex                                 // synchronizes access to shared variables
 	stopWG       sync.WaitGroup                  // a method to wait for stream activity to stop before closing it
+	collisionFree chan struct{}					 // a method to indicate a collision window
+}
+
+func (conn *connection) closeDelay() {
+	// TODO-RONEN: implement
+	closeWait := 2*time.Second
+	time.AfterFunc(closeWait, func() {
+		conn.close()
+	})
 }
 
 func (conn *connection) close() {
